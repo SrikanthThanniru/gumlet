@@ -22,6 +22,7 @@ export async function POST(req: Request) {
       title,
       format: "hls",
       keep_original: true,
+      resolution: ["480p", "720p", "1080p"],
     });
 
     return NextResponse.json({ assetId: asset_id, uploadUrl: upload_url });

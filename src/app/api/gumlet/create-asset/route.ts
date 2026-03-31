@@ -57,7 +57,9 @@ export async function POST(req: Request) {
     const errors: Array<{ label: string; message: string }> = [];
     for (const candidate of inputs) {
       try {
-        const { asset_id } = await gumletCreateAssetFromUrl(candidate.value);
+        const { asset_id } = await gumletCreateAssetFromUrl(candidate.value, {
+          resolution: "480p,720p,1080p",
+        });
         return NextResponse.json({ assetId: asset_id, inputModeUsed: candidate.label });
       } catch (e) {
         const message = e instanceof Error ? e.message : "Unknown error";

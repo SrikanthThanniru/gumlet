@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type UploadUrlResponse = { uploadUrl: string; key: string };
 type CreateAssetResponse = { assetId: string };
@@ -37,6 +37,12 @@ export function VideoUploader() {
   const [assetStatus, setAssetStatus] = useState<AssetStatusResponse | null>(null);
   const [signedGetUrl, setSignedGetUrl] = useState<string | null>(null);
   const [probe, setProbe] = useState<string | null>(null);
+  const [probeEmbed, setProbeEmbed] = useState<string | null>(null);
+  const [playerMode, setPlayerMode] = useState<"gumlet" | "hls">("gumlet");
+  const [hlsLevels, setHlsLevels] = useState<Array<{ index: number; height: number }>>([]);
+  const [selectedQuality, setSelectedQuality] = useState<number | "auto">("auto");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const hlsRef = useRef<any>(null);
 
   function renderValue(v: unknown) {
     if (typeof v === "string") return v;
@@ -84,6 +90,78 @@ export function VideoUploader() {
   }, [assetId]);
 
   useEffect(() => {
+    // HLS.js wiring for reliable in-app playback
+    if (playerMode !== "hls") return;
+    const url = assetStatus?.playback_url;
+    const video = videoRef.current;
+    if (!url || !video) return;
+
+    let hls: any = null;
+    let cancelled = false;
+
+    (async () => {
+      const mod = await import("hls.js");
+      const Hls = mod.default;
+
+      if (cancelled) return;
+
+      if (Hls.isSupported()) {
+        hls = new Hls({ enableWorker: true });
+        hlsRef.current = hls;
+        setHlsLevels([]);
+        setSelectedQuality("auto");
+
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          const allowedHeights = new Set([480, 720, 1080]);
+          const levels = (hls.levels || [])
+            .map((lvl: any, index: number) => ({
+              index,
+              height: typeof lvl?.height === "number" ? lvl.height : 0,
+            }))
+            .filter((x: { height: number }) => allowedHeights.has(x.height))
+            .sort((a: { height: number }, b: { height: number }) => a.height - b.height);
+
+          setHlsLevels(levels);
+          // keep Auto by default; user can override
+          hls.currentLevel = -1;
+          hls.autoLevelEnabled = true;
+        });
+
+        hls.loadSource(url);
+        hls.attachMedia(video);
+      } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        // Safari
+        video.src = url;
+      } else {
+        setError("This browser cannot play HLS.");
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      try {
+        hlsRef.current = null;
+        if (hls) hls.destroy();
+      } catch {
+        // ignore
+      }
+    };
+  }, [playerMode, assetStatus?.playback_url]);
+
+  useEffect(() => {
+    if (playerMode !== "hls") return;
+    const hls = hlsRef.current;
+    if (!hls) return;
+
+    if (selectedQuality === "auto") {
+      hls.currentLevel = -1;
+      return;
+    }
+
+    hls.currentLevel = selectedQuality;
+  }, [playerMode, selectedQuality]);
+
+  useEffect(() => {
     if (!key) {
       setSignedGetUrl(null);
       return;
@@ -113,6 +191,10 @@ export function VideoUploader() {
     setAssetStatus(null);
     setSignedGetUrl(null);
     setProbe(null);
+    setProbeEmbed(null);
+    setPlayerMode("gumlet");
+    setHlsLevels([]);
+    setSelectedQuality("auto");
 
     try {
       const uploadUrlRes = await fetch("/api/s3/upload-url", {
@@ -164,6 +246,10 @@ export function VideoUploader() {
     setAssetStatus(null);
     setSignedGetUrl(null);
     setProbe(null);
+    setProbeEmbed(null);
+    setPlayerMode("gumlet");
+    setHlsLevels([]);
+    setSelectedQuality("auto");
 
     try {
       const initRes = await fetch("/api/gumlet/direct-upload", {
@@ -337,9 +423,34 @@ export function VideoUploader() {
                       >
                         Probe playback (server-side)
                       </button>
+                      <button
+                        type="button"
+                        className="mt-2 inline-flex items-center text-[11px] font-semibold text-blue-700 underline"
+                        onClick={async () => {
+                          setProbeEmbed("Probing embed…");
+                          try {
+                            const r = await fetch(
+                              `/api/gumlet/probe-embed?assetId=${assetId}`,
+                            );
+                            const t = await r.text();
+                            setProbeEmbed(t);
+                          } catch (e) {
+                            setProbeEmbed(
+                              e instanceof Error ? e.message : "Probe failed unexpectedly",
+                            );
+                          }
+                        }}
+                      >
+                        Probe embed (server-side)
+                      </button>
                       {probe ? (
                         <pre className="whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white p-2 text-[10px] text-zinc-700">
                           {probe}
+                        </pre>
+                      ) : null}
+                      {probeEmbed ? (
+                        <pre className="whitespace-pre-wrap break-words rounded-lg border border-zinc-200 bg-white p-2 text-[10px] text-zinc-700">
+                          {probeEmbed}
                         </pre>
                       ) : null}
                     </div>
@@ -374,18 +485,82 @@ export function VideoUploader() {
       </div>
 
       <div className="rounded-2xl border border-zinc-200 bg-white p-5 shadow-sm">
-        <div className="mb-3 text-sm font-semibold text-zinc-900">Player</div>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <div className="text-sm font-semibold text-zinc-900">Player</div>
+          {assetId ? (
+            <div className="inline-flex rounded-xl border border-zinc-200 bg-white p-1 text-xs">
+              <button
+                type="button"
+                onClick={() => setPlayerMode("gumlet")}
+                className={`rounded-lg px-3 py-1 font-semibold ${
+                  playerMode === "gumlet"
+                    ? "bg-zinc-900 text-white"
+                    : "text-zinc-700 hover:bg-zinc-50"
+                }`}
+              >
+                Gumlet Embed
+              </button>
+              <button
+                type="button"
+                onClick={() => setPlayerMode("hls")}
+                className={`rounded-lg px-3 py-1 font-semibold ${
+                  playerMode === "hls"
+                    ? "bg-zinc-900 text-white"
+                    : "text-zinc-700 hover:bg-zinc-50"
+                }`}
+              >
+                HLS (in-app)
+              </button>
+            </div>
+          ) : null}
+        </div>
         {assetId ? (
-          <div className="w-full overflow-hidden rounded-xl bg-black">
-            <iframe
-              className="block h-[500px] w-full"
-              src={`https://play.gumlet.io/embed/${assetId}`}
-              title="Gumlet video player"
-              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-              allowFullScreen
-              referrerPolicy="origin"
-            />
-          </div>
+          playerMode === "gumlet" ? (
+            <div className="w-full overflow-hidden rounded-xl bg-black">
+              <iframe
+                className="block h-[500px] w-full"
+                src={`https://play.gumlet.io/embed/${assetId}`}
+                title="Gumlet video player"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+                allowFullScreen
+                referrerPolicy="origin"
+              />
+            </div>
+          ) : (
+            <div className="w-full space-y-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="text-xs font-semibold text-zinc-900">Quality</div>
+                <select
+                  className="h-9 rounded-lg border border-zinc-200 bg-white px-2 text-xs font-semibold text-zinc-900"
+                  value={selectedQuality}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSelectedQuality(v === "auto" ? "auto" : Number(v));
+                  }}
+                >
+                  <option value="auto">Auto</option>
+                  {hlsLevels.map((l) => (
+                    <option key={l.index} value={l.index}>
+                      {l.height}p
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <video
+                ref={videoRef}
+                className="block h-[500px] w-full"
+                controls
+                playsInline
+              />
+              {hlsLevels.length === 0 ? (
+                <div className="text-[11px] text-zinc-600">
+                  Available qualities will appear once the manifest loads. (Showing only 480p /
+                  720p / 1080p.)
+                </div>
+              ) : null}
+            </div>
+          )
         ) : (
           <div className="flex aspect-video w-full items-center justify-center rounded-xl bg-zinc-900 text-sm text-zinc-200">
             Upload a video to see the Gumlet player here.
