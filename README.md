@@ -1,8 +1,27 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+## S3 Upload + Gumlet Player (Next.js)
+
+Minimal demo app:
+
+- Upload a video from the browser to **Amazon S3** using a **pre-signed PUT URL**
+- Backend calls **Gumlet Create Asset** with `s3://bucket/key` (requires Gumlet workspace S3 Source integration)
+- UI embeds the **Gumlet player** using the returned `assetId`
+- (Recommended) Upload a video **directly to Gumlet** using Gumlet **Direct Upload**
 
 ## Getting Started
 
-First, run the development server:
+### 1) Configure environment
+
+Copy `.env.local.example` to `.env.local` and fill values:
+
+- `AWS_REGION`
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `S3_BUCKET_NAME`
+- `GUMLET_API_KEY`
+- `GUMLET_COLLECTION_ID`
+- `GUMLET_SOURCE_ID` (optional; if omitted we reuse `GUMLET_COLLECTION_ID`)
+
+### 2) Run the dev server
 
 ```bash
 npm run dev
@@ -16,7 +35,15 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### API routes
+
+- `POST /api/s3/upload-url` → returns `{ uploadUrl, key }`
+- `POST /api/gumlet/create-asset` → returns `{ assetId }`
+- `POST /api/gumlet/direct-upload` → returns `{ assetId, uploadUrl }`
+
+### Notes
+
+- For **S3 → Gumlet** imports, configure your Gumlet workspace Source as **Amazon S3 (Object Storage)** and grant Gumlet `ListBucket` + `GetObject`.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
